@@ -1,128 +1,126 @@
-from datetime import datetime
-from zoneinfo import ZoneInfo  
+import streamlit as st
 import requests
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
+st.set_page_config(page_title="Conversor de Moedas", page_icon="💱", layout="centered")
+
+URL_API = "https://economia.awesomeapi.com.br/json/last/USD-BRL,EUR-BRL,BTC-BRL"
+
+MOEDAS = {
+    "BRL": "🇧🇷 Real (BRL)",
+    "USD": "🇺🇸 Dólar (USD)",
+    "EUR": "🇪🇺 Euro (EUR)",
+    "BTC": "₿ Bitcoin (BTC)",
+}
+
+
+@st.cache_data(ttl=30, show_spinner=False)
 def buscar_cotacoes():
+    resposta = requests.get(URL_API, timeout=10)
+    resposta.raise_for_status()
+    return resposta.json()
 
-    url = "https://economia.awesomeapi.com.br/json/last/USD-BRL,EUR-BRL,BTC-BRL"
-    try:
-        resposta = requests.get(url)
-        resposta.raise_for_status()
-        return resposta.json()
-    except requests.exceptions.RequestException as e:
-        return None
 
 def processar_fuso_horario(timestamp_api):
     try:
         data_utc = datetime.fromtimestamp(int(timestamp_api), ZoneInfo("UTC"))
-        
-        fuso_local = ZoneInfo("America/Maceio")
-        data_local = data_utc.astimezone(fuso_local)
-        
+        data_local = data_utc.astimezone(ZoneInfo("America/Maceio"))
         return data_local.strftime("%d/%m/%Y às %H:%M:%S (%Z)")
-    except Exception as e:
-        return f"Não foi possível converter o fuso horário: {e}"
+    except Exception as erro:
+        return f"Não foi possível converter o fuso horário: {erro}"
 
-def calcular_conversao(valor, moeda_origem, moeda_destino, dados_api):
 
-    if not dados_api:
-        return None
+def montar_taxas_em_brl(dados_api):
+    return {
+        "BRL": 1.0,
+        "USD": float(dados_api["USDBRL"]["bid"]),
+        "EUR": float(dados_api["EURBRL"]["bid"]),
+        "BTC": float(dados_api["BTCBRL"]["bid"]),
+    }
 
-    try:
-        cotacao_usd = float(dados_api['USDBRL']['bid'])
-        cotacao_eur = float(dados_api['EURBRL']['bid'])
-        
-        timestamp_servidor = dados_api['USDBRL']['timestamp']
-        horario_convertido = processar_fuso_horario(timestamp_servidor)
 
-        if moeda_origem == "USD":
-            valor_em_brl = valor * cotacao_usd
-        elif moeda_origem == "EUR":
-            valor_em_brl = valor * cotacao_eur
-        elif moeda_origem == "BRL":
-            valor_em_brl = valor
-        else:
-            raise ValueError("Moeda de origem inválida.")
+def converter(valor, moeda_origem, moeda_destino, taxas):
+    valor_em_brl = valor * taxas[moeda_origem]
+    return valor_em_brl / taxas[moeda_destino]
 
-        if moeda_destino == "USD":
-            valor_convertido = valor_em_brl / cotacao_usd
-        elif moeda_destino == "EUR":
-            valor_convertido = valor_em_brl / cotacao_eur
-        elif moeda_destino == "BRL":
-            valor_convertido = valor_em_brl
-        else:
-            raise ValueError("Moeda de destino inválida.")
 
-        margem_inferior = valor_convertido * 0.97
-        margem_superior = valor_convertido * 1.03
+def formatar(valor, moeda):
+    casas = 8 if moeda == "BTC" else 2
+    texto = f"{valor:,.{casas}f}"
+    return texto.replace(",", "X").replace(".", ",").replace("X", ".")
 
-        return {
-            "convertido": round(valor_convertido, 2),
-            "minimo": round(margem_inferior, 2),
-            "maximo": round(margem_superior, 2),
-            "horario_local": horario_convertido
-        }
-    except KeyError as e:
-        print(f"[Erro de Dados]: Chave não encontrada -> {e}")
-        return None
-    except ValueError as ve:
-        print(f"[Erro]: {ve}")
-        return None
 
-def main():
-    print("Conversão financeira e consulta de cotações em tempo real")
+def inverter_moedas():
+    origem = st.session_state["moeda_origem"]
+    st.session_state["moeda_origem"] = st.session_state["moeda_destino"]
+    st.session_state["moeda_destino"] = origem
 
-    try:
-        valor_str = input("\nDigite o valor numérico que deseja converter: ").strip().replace(",", ".")
-        valor_usuario = float(valor_str)
-    except ValueError:
-        print("\n[Erro]: Valor inválido inserido. Por favor, digite apenas números.")
-        return
-    print("\nEscolha a moeda de origem:")
-    print("1 - BRL (Real)")
-    print("2 - USD (Dólar)")
-    print("3 - EUR (Euro)")
-    
-    op_origem = input("Digite o número da opção de origem: ").strip()
-    mapa_moedas = {"1": "BRL", "2": "USD", "3": "EUR"}
-    
-    if op_origem not in mapa_moedas:
-        print("\n[Erro]: Opção de origem inválida.")
-        return
-    moeda_origem = mapa_moedas[op_origem]
 
-    print("\nEscolha a moeda de destino:")
-    print("1 - BRL (Real)")
-    print("2 - USD (Dólar)")
-    print("3 - EUR (Euro)")
-    
-    op_destino = input("Digite o número da opção de destino: ").strip()
-    
-    if op_destino not in mapa_moedas:
-        print("\n[Erro]: Opção de destino inválida.")
-        return
-    moeda_destino = mapa_moedas[op_destino]
+if "moeda_origem" not in st.session_state:
+    st.session_state["moeda_origem"] = "USD"
+if "moeda_destino" not in st.session_state:
+    st.session_state["moeda_destino"] = "BRL"
 
-    if moeda_origem == moeda_destino:
-        return print("Por favor, escolha moedas diferentes para a conversão.")
 
+st.title("Conversor de Moedas")
+st.caption("Cotações em tempo real. O resultado aparece sozinho, sem precisar clicar em nada.")
+
+try:
     dados = buscar_cotacoes()
+    taxas = montar_taxas_em_brl(dados)
+except (requests.exceptions.RequestException, KeyError, ValueError):
+    st.error("Não foi possível obter as cotações agora. Tente novamente em instantes.")
+    st.stop()
 
-    if dados:
-        resultado = calcular_conversao(valor_usuario, moeda_origem, moeda_destino, dados)
-        
-        if resultado:
-            print(f" Resultado da conversão")
-            print(f"Quantia inserida: {valor_usuario} {moeda_origem}")
-            print(f"Valor convertido {moeda_destino}: {resultado['convertido']} {moeda_destino}")
-            print(f"Margem de erro inferior: {resultado['minimo']} {moeda_destino}")
-            print(f"Margem de erro superior: {resultado['maximo']} {moeda_destino}")
-            print(f"Horário da cotação: {resultado['horario_local']}")
+valor_usuario = st.number_input(
+    "Valor a converter", min_value=0.0, value=100.0, step=10.0, format="%.4f"
+)
 
-        else:
-            print("\n[Erro]: Erro no processamento da conversão.")
-    else:
-        print("\n[Erro]: Não foi possível obter os dados da API.")
+col_origem, col_botao, col_destino = st.columns([5, 2, 5])
 
-if __name__ == "__main__":
-    main()
+with col_origem:
+    moeda_origem = st.selectbox(
+        "De", list(MOEDAS), format_func=lambda s: MOEDAS[s], key="moeda_origem"
+    )
+
+with col_botao:
+    st.write("")
+    st.write("")
+    st.button("⇄ Inverter", on_click=inverter_moedas, use_container_width=True)
+
+with col_destino:
+    moeda_destino = st.selectbox(
+        "Para", list(MOEDAS), format_func=lambda s: MOEDAS[s], key="moeda_destino"
+    )
+
+st.divider()
+
+if moeda_origem == moeda_destino:
+    st.info("Escolha moedas diferentes para a conversão.")
+else:
+    convertido = converter(valor_usuario, moeda_origem, moeda_destino, taxas)
+
+    st.metric(
+        label=f"{formatar(valor_usuario, moeda_origem)} {moeda_origem} equivalem a",
+        value=f"{formatar(convertido, moeda_destino)} {moeda_destino}",
+    )
+
+    col_min, col_max = st.columns(2)
+    col_min.metric("Margem inferior (-3%)", f"{formatar(convertido * 0.97, moeda_destino)} {moeda_destino}")
+    col_max.metric("Margem superior (+3%)", f"{formatar(convertido * 1.03, moeda_destino)} {moeda_destino}")
+
+st.subheader(f"{formatar(valor_usuario, moeda_origem)} {moeda_origem} em todas as moedas")
+linhas = []
+for sigla in MOEDAS:
+    if sigla != moeda_origem:
+        valor_na_moeda = converter(valor_usuario, moeda_origem, sigla, taxas)
+        linhas.append({"Moeda": MOEDAS[sigla], "Valor": formatar(valor_na_moeda, sigla)})
+st.table(linhas)
+
+horario = processar_fuso_horario(dados["USDBRL"]["timestamp"])
+st.caption(f"Horário da cotação: {horario}")
+
+if st.button("Atualizar cotações agora"):
+    buscar_cotacoes.clear()
+    st.rerun()
